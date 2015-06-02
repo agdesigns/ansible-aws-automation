@@ -98,3 +98,39 @@
           hostname: "{{ item['tagged_instances'][0]['public_ip'] }}"
           groups: "tag_Name-{{ item['item']['name'] }}"
         with_items: ec2.results
+
+       - ec2_group:
+            name: db
+            description: Security group for db
+            vpc_id: "{{ vpc_id }}"
+            rules:
+              - proto: tcp
+                from_port: 5432
+                to_port: 5432
+                group_name: staging-web
+          register: db_security_group
+        - set_fact:
+            db_security_group_id: "{{ db_security_group.group_id }}"
+
+        - rds_subnet_group:
+            state: present
+            name: db-subnet-group
+            description: db subnet group
+            subnets: '{{ all_vpc_subnet_ids }}'
+          register: rds_subnet_group_result
+
+        - include_vars: secrets/db.yml
+
+        - rds:
+            wait: yes
+            command: create
+            instance_name: rds-staging
+            db_engine: postgres
+            size: 5
+            instance_type: db.t2.micro
+            db_name: staging
+            username: staging_master
+            password: "{{ db_password['rds-staging'] }}"
+            subnet: db-subnet-group
+            vpc_security_groups: "{{ db_security_group_id }}"
+            port: 5432
