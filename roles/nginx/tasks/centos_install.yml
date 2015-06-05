@@ -1,0 +1,21 @@
+- name: Copy the epel packages
+  copy: 
+    src: nginx.repo 
+    dest: /etc/yum.repos.d/nginx.repo
+
+- name: Nginx | Make sure nginx is installed (package)
+  yum:
+    name: nginx
+    state: present
+  notify:
+    - restart nginx
+
+- name: Nginx | Make sure the Nginx configuration is updated
+  template:
+    src: nginx.conf.j2
+    dest: "{{nginx_dir}}/nginx.conf"
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+    - restart nginx

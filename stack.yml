@@ -1,136 +1,135 @@
-- name: Provision the instances
-  hosts: localhost
-    gather_facts: false
-    connection: local
-    tasks:
-      - ec2_vpc:
-          resource_tags:
-            environment: staging
-          state: present
-          cidr_block: 172.22.0.0/16
-          wait: yes
-          internet_gateway: yes
-          subnets:
-            - cidr: 172.22.0.0/24
-              az: us-west-1a
-            - cidr: 172.22.1.0/24
-              az: us-west-1b
-          route_tables:
-            - subnets:
-                - 172.22.0.0/24
-                - 172.22.1.0/24
-              routes:
-                - dest: 0.0.0.0/0
-                  gw: igw
-        register: vpc_result
+---
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - ec2_vpc:
+        resource_tags:
+          environment: staging
+        state: present
+        cidr_block: 172.22.0.0/16
+        wait: yes
+        internet_gateway: yes
+        subnets:
+          - cidr: 172.22.0.0/24
+            az: us-west-1a
+          - cidr: 172.22.1.0/24
+            az: us-west-1b
+        route_tables:
+          - subnets:
+              - 172.22.0.0/24
+              - 172.22.1.0/24
+            routes:
+              - dest: 0.0.0.0/0
+                gw: igw
+      register: vpc_result
+    - set_fact:
+        vpc_id: "{{ vpc_result.vpc_id }}"
+        vpc_subnet_id: "{{ vpc_result.subnets[0]['id'] }}"
+        all_vpc_subnet_ids:
+          - "{{ vpc_result.subnets[0]['id'] }}"
+          - "{{ vpc_result.subnets[1]['id'] }}"
 
-      - set_fact:
-          vpc_id: "{{ vpc_result.vpc_id }}"
-          vpc_subnet_id: "{{ vpc_result.subnets[0]['id'] }}"
-          all_vpc_subnet_ids:
-            - "{{ vpc_result.subnets[0]['id'] }}"
-            - "{{ vpc_result.subnets[1]['id'] }}"
+    - debug: var=vpc_result
 
-      - debug: var=vpc_result
+    - ec2_group:
+        name: common
+        description: Common security group for apps (ssh access)
+        vpc_id: "{{ vpc_id }}"
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+      register: common_security_group
+    - set_fact:
+        common_security_group_id: "{{ common_security_group.group_id }}"
 
-      - ec2_group:
-          name: common
-          description: Common security group for apps (ssh access)
-          vpc_id: "{{ vpc_id }}"
-          rules:
-            - proto: tcp
-              from_port: 22
-              to_port: 22
-              cidr_ip: 0.0.0.0/0
-        register: common_security_group
-      - set_fact:
-          common_security_group_id: "{{ common_security_group.group_id }}"
+    - ec2_group:
+        name: staging-web
+        description: Security group for staging (app)
+        vpc_id: "{{ vpc_id }}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+      register: staging_web_security_group
+    - set_fact:
+        staging_web_security_group_id: "{{ security_group.group_id }}"
 
-      - ec2_group:
-          name: staging-web
-          description: Security group for staging (app)
-          vpc_id: "{{ vpc_id }}"
-          rules:
-            - proto: tcp
-              from_port: 80
-              to_port: 80
-              cidr_ip: 0.0.0.0/0
-            - proto: tcp
-              from_port: 443
-              to_port: 443
-              cidr_ip: 0.0.0.0/0
-        register: staging_web_security_group
-      - set_fact:
-          staging_web_security_group_id: "{{ security_group.group_id }}"
+    - name: search for an ami image
+      ec2_ami_search: >
+        region={{ region|default('us-east-1') }}
+        store={{ store|default('ebs') }}
+        virt={{ virt|default('hvm') }}
+        distro={{ distro|default('ubuntu') }}
+        release={{ release|default('precise') }}
+      register: ami_data
 
-      - name: search for an ami image
-        ec2_ami_search: >
-          region={{ region|default('us-east-1') }}
-          store={{ store|default('ebs') }}
-          virt={{ virt|default('hvm') }}
-          distro={{ distro|default('ubuntu') }}
-          release={{ release|default('precise') }}
-        register: ami_data
+    - name: debug ami image
+      debug: 'msg="{{ ami_data }}"'
 
-      - name: debug ami image
-        debug: 'msg="{{ ami_data }}"'
+    - ec2:
+        key_name: my_key
+        instance_type: "{{ item.instance_type }}"
+        instance_tags:
+          Name: "{{ item.name }}"
+        image: "{{ item.image }}"
+        wait: yes
+        group: "{{ item.name }},common"
+        exact_count: 1
+        count_tag:
+          Name: "{{ item.name }}"
+        vpc_subnet_id: "{{ vpc_subnet_id }}"
+        assign_public_ip: yes
+      with_items:
+        - name: staging-web
+          image: "{{ ami_data.ami }}"
+          instance_type: t2.micro
+      register: ec2
 
-      - ec2:
-          key_name: my_key
-          instance_type: "{{ item.instance_type }}"
-          instance_tags:
-            Name: "{{ item.name }}"
-          image: "{{ item.image }}"
-          wait: yes
-          group: "{{ item.name }},common"
-          exact_count: 1
-          count_tag:
-            Name: "{{ item.name }}"
-          vpc_subnet_id: "{{ vpc_subnet_id }}"
-          assign_public_ip: yes
-        with_items:
-          - name: staging-web
-            image: "{{ ami_data.ami }}"
-            instance_type: t2.micro
-        register: ec2
+    - add_host:
+        hostname: "{{ item['tagged_instances'][0]['public_ip'] }}"
+        groups: "tag_Name-{{ item['item']['name'] }}"
+      with_items: ec2.results
 
-      - add_host:
-          hostname: "{{ item['tagged_instances'][0]['public_ip'] }}"
-          groups: "tag_Name-{{ item['item']['name'] }}"
-        with_items: ec2.results
+    - ec2_group:
+        name: db
+        description: Security group for db
+        vpc_id: "{{ vpc_id }}"
+        rules:
+          - proto: tcp
+            from_port: 5432
+            to_port: 5432
+            group_name: staging-web
+      register: db_security_group
+    - set_fact:
+        db_security_group_id: "{{ db_security_group.group_id }}"
 
-       - ec2_group:
-            name: db
-            description: Security group for db
-            vpc_id: "{{ vpc_id }}"
-            rules:
-              - proto: tcp
-                from_port: 5432
-                to_port: 5432
-                group_name: staging-web
-          register: db_security_group
-        - set_fact:
-            db_security_group_id: "{{ db_security_group.group_id }}"
+    - rds_subnet_group:
+        state: present
+        name: db-subnet-group
+        description: db subnet group
+        subnets: '{{ all_vpc_subnet_ids }}'
+      register: rds_subnet_group_result
 
-        - rds_subnet_group:
-            state: present
-            name: db-subnet-group
-            description: db subnet group
-            subnets: '{{ all_vpc_subnet_ids }}'
-          register: rds_subnet_group_result
+    - include_vars: secrets/db.yml
 
-        - include_vars: secrets/db.yml
-
-        - rds:
-            wait: yes
-            command: create
-            instance_name: rds-staging
-            db_engine: postgres
-            size: 5
-            instance_type: db.t2.micro
-            db_name: staging
-            username: staging_master
-            password: "{{ db_password['rds-staging'] }}"
-            subnet: db-subnet-group
-            vpc_security_groups: "{{ db_security_group_id }}"
-            port: 5432
+    - rds:
+        wait: yes
+        command: create
+        instance_name: rds-staging
+        db_engine: postgres
+        size: 5
+        instance_type: db.t2.micro
+        db_name: staging
+        username: staging_master
+        password: "{{ db_password['rds-staging'] }}"
+        subnet: db-subnet-group
+        vpc_security_groups: "{{ db_security_group_id }}"
+        port: 5432
