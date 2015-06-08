@@ -1,6 +1,6 @@
 - name: Copy the epel packages
-  copy: 
-    src: nginx.repo 
+  copy:
+    src: nginx.repo
     dest: /etc/yum.repos.d/nginx.repo
 
 - name: Nginx | Make sure nginx is installed (package)

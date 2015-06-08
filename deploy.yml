@@ -1,0 +1,7 @@
+---
+- hosts:
+    - tag_Name_staging_proxy
+    - tag_Name_staging_nodejs
+  sudo: yes
+  roles:
+    - role: nginx

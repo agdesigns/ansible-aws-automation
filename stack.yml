@@ -14,7 +14,7 @@
           - cidr: 172.22.0.0/24
             az: us-west-1a
           - cidr: 172.22.1.0/24
-            az: us-west-1b
+            az: us-west-1c
         route_tables:
           - subnets:
               - 172.22.0.0/24
@@ -46,8 +46,8 @@
         common_security_group_id: "{{ common_security_group.group_id }}"
 
     - ec2_group:
-        name: staging-web
-        description: Security group for staging (app)
+        name: staging-proxy
+        description: Security group for staging (proxy)
         vpc_id: "{{ vpc_id }}"
         rules:
           - proto: tcp
@@ -58,24 +58,42 @@
             from_port: 443
             to_port: 443
             cidr_ip: 0.0.0.0/0
-      register: staging_web_security_group
+      register: staging_proxy_security_group
     - set_fact:
-        staging_web_security_group_id: "{{ security_group.group_id }}"
+        staging_proxy_security_group_id: "{{ staging_proxy_security_group.group_id }}"
+
+    - ec2_group:
+        name: staging-nodejs
+        description: Security group for staging (nodejs)
+        vpc_id: "{{ vpc_id }}"
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+      register: staging_nodejs_security_group
+    - set_fact:
+        staging_nodejs_security_group_id: "{{ staging_nodejs_security_group.group_id }}"
+
 
     - name: search for an ami image
       ec2_ami_search: >
-        region={{ region|default('us-east-1') }}
+        region={{ region|default('us-west-1') }}
         store={{ store|default('ebs') }}
         virt={{ virt|default('hvm') }}
         distro={{ distro|default('ubuntu') }}
-        release={{ release|default('precise') }}
+        release={{ release|default('trusty') }}
       register: ami_data
 
     - name: debug ami image
       debug: 'msg="{{ ami_data }}"'
 
     - ec2:
-        key_name: my_key
+        key_name: private-key-file
         instance_type: "{{ item.instance_type }}"
         instance_tags:
           Name: "{{ item.name }}"
@@ -88,7 +106,10 @@
         vpc_subnet_id: "{{ vpc_subnet_id }}"
         assign_public_ip: yes
       with_items:
-        - name: staging-web
+        - name: staging-proxy
+          image: "{{ ami_data.ami }}"
+          instance_type: t2.micro
+        - name: staging-nodejs
           image: "{{ ami_data.ami }}"
           instance_type: t2.micro
       register: ec2
@@ -121,7 +142,7 @@
     - include_vars: secrets/db.yml
 
     - rds:
-        wait: yes
+        wait: no
         command: create
         instance_name: rds-staging
         db_engine: postgres
